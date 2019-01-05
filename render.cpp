@@ -7,28 +7,54 @@
 #define NUM_CHANNELS 2    // NUMBER OF CHANNELS IN THE FILE
 #define BUFFER_LEN 2048   // BUFFER LENGTH
 
-float gDuration = 10 * 44100;
+float gDuration = 5 * 60 * 44100; // max length of 10 minutes
 float sorted[BUFFER_LEN*2];
-int gCount = 0;
+int gCount = 1;
+int gArm = 0;
+int gPreroll = 0;
 
 // figure out how to pass vars to AuxiliaryTask / use less globals
 // name of file generated
 SampleData gSampleBuf[2][NUM_CHANNELS];
 //index value of buffer array
-int gPos = 0;
+int gPos = 1;
 
 //start on second buffer bc it will switch on first run thru
 int gActiveBuffer = 0;
 int gDoneLoadingBuffer = 1;
 int gChunk = 0;
 
+////////////////////////////////
+int bNow, bPrev;
+int bEnable = 0;
+
+int closed = 0;
+
 AuxiliaryTask gFillBufferTask;
+AuxiliaryTask gCloseFileTask;
+AuxiliaryTask gOpenFileTask;
 
 SF_INFO sfinfo;
 
 const char* path = "./test.wav";
 
 SNDFILE * outfile;
+
+void openFile(void*) {
+
+    //open sndfile pointer??
+    // sf_open(filepath, mode, pointer to sfinfo)
+    //     mode can be read, write, or read/write
+    outfile = sf_open(path, SFM_WRITE, &sfinfo);
+    printf(".wav file open and writing\n");
+}
+
+
+void closeFile(void*) {
+    sf_write_sync(outfile);
+    sf_close(outfile);
+    printf(".wav file written and closed\n");
+}
 
 void fileSetup() {
     sfinfo.channels = NUM_CHANNELS;
@@ -39,8 +65,6 @@ void fileSetup() {
 void writeFile(float *buf, int startSamp, int endSamp){
     //calculate duration of write operation - wouldn't this just be BUFFER_LEN?
     int frameLen = endSamp - startSamp;
-
-    ///sf_seek(outfile, startSamp, SEEK_SET);
 
     //to use sf_write_xxxx functions, you must declare it as an sf_count variable
     //because it returns the number of samples/frames written (but this value does not
@@ -71,10 +95,25 @@ void fillBuffer(void*) {
 
 bool setup(BelaContext *context, void *userData) {
 
+    //LED and Button pins
+    pinMode(context, 0, P8_08, INPUT);
+    pinMode(context, 0, P8_07, OUTPUT);
+    pinMode(context, 0, P9_16, OUTPUT);
+
     //initialize auxiliary task
     if((gFillBufferTask = Bela_createAuxiliaryTask(&fillBuffer, 90, "fill-buffer")) == 0) {
         return false;
     }
+
+    if((gCloseFileTask = Bela_createAuxiliaryTask(&closeFile, 80, "close-file")) == 0) {
+        return false;
+    }
+
+    if((gOpenFileTask = Bela_createAuxiliaryTask(&openFile, 85, "open-file")) == 0) {
+        return false;
+    }
+
+    fileSetup(); //because sfinfo definitions must be in a function?
 
     //initialize sample data struct with buffers/arrays
     for(int ch=0;ch<NUM_CHANNELS;ch++) {
@@ -84,17 +123,31 @@ bool setup(BelaContext *context, void *userData) {
         }
     }
 
-    fileSetup(); //because sfinfo definitions must be in a function?
-
-    //open sndfile pointer??
-    // sf_open(filepath, mode, pointer to sfinfo)
-    //     mode can be read, write, or read/write
-    outfile = sf_open(path, SFM_WRITE, &sfinfo);
-
     return true;
 }
 
 void render(BelaContext *context, void *userData) {
+
+    for(unsigned int n = 0; n < context -> digitalFrames; n++){
+
+        digitalWriteOnce(context, n, P9_16, 1); //write the status to the LED
+
+        bNow = 1 - digitalRead(context, 0, P8_08); //read the value of the button
+
+        if (bNow != bPrev) {
+            if (bNow == 1) {
+                if (bEnable == 0) {
+                    bEnable = 1;
+                } else {
+                    bEnable = 0;
+                }
+            }
+        }
+
+        bPrev = bNow;
+        digitalWriteOnce(context, n, P8_07, bEnable); //write the status to the LED
+    }
+
     for(unsigned int n = 0; n < context->audioFrames; n++) {
 
         float inL = audioRead(context, n, 0);
@@ -114,29 +167,45 @@ void render(BelaContext *context, void *userData) {
         }
 
         //if samples counted are more than duration, mute, otherwise output sine and write file
-        if (gCount > gDuration) {
-            for(unsigned int ch = 0; ch < context->audioOutChannels; ch++) {
-                audioWrite(context, n, ch, 0);
+        if (bEnable == 1) {
+            if (gArm == 0) {
+                gArm = 1;
+                Bela_scheduleAuxiliaryTask(gOpenFileTask);
+            } else if (gArm > 0) {
+                gPreroll++;
             }
+
+            if (gPreroll > BUFFER_LEN * 2) {
+                gSampleBuf[gActiveBuffer][0].samples[gPos] = inL;
+                audioWrite(context, n, 0, inL);
+                gSampleBuf[gActiveBuffer][1].samples[gPos] = inR;
+                audioWrite(context, n, 1, inR);
+
+                gCount++;
+
+                if (gCount >= gDuration){
+                    bEnable = 0;
+                    gCount = 1;
+                    Bela_scheduleAuxiliaryTask(gCloseFileTask);
+                    closed = 1;
+                }
+            }
+
         } else {
+            for(unsigned int ch = 0; ch < context->audioOutChannels; ch++) {
+                    audioWrite(context, n, ch, 0);
+                }
 
-            gSampleBuf[gActiveBuffer][0].samples[gPos] = inL;
-            audioWrite(context, n, 0, inL);
-            gSampleBuf[gActiveBuffer][1].samples[gPos] = inR;
-            audioWrite(context, n, 1, inR);
         }
-
-        gCount++;
         gPos = gCount%BUFFER_LEN;
     }
 }
 
 void cleanup(BelaContext *context, void *userData) {
-    //i think this writes the appropriate header info for the file?
-    //     ie non-audio data for wav, aiff, etc
-    sf_write_sync(outfile);
-    //closes file
-    sf_close(outfile);
+    if (closed == 0) {
+        Bela_scheduleAuxiliaryTask(gCloseFileTask);
+        closed = 1;
+    }
 
     // Delete the allocated buffers
     for(int ch=0;ch<NUM_CHANNELS;ch++) {
