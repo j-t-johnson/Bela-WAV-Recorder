@@ -7,7 +7,7 @@
 #define NUM_CHANNELS 2    // NUMBER OF CHANNELS IN THE FILE
 #define BUFFER_LEN 2048   // BUFFER LENGTH
 
-float gDuration = 5 * 60 * 44100; // max length of 10 minutes
+float gDuration = 20 * 60 * 44100; // max length of 20 minutes
 float sorted[BUFFER_LEN*2];
 int gCount = 1;
 int gArm = 0;
