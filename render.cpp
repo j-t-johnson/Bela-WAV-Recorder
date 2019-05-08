@@ -7,7 +7,9 @@
 #define NUM_CHANNELS 2    // NUMBER OF CHANNELS IN THE FILE
 #define BUFFER_LEN 2048   // BUFFER LENGTH
 
-float gDuration = 20 * 60 * 44100; // max length of 20 minutes
+float gDuration = 20 * (60 * 44100);
+//                ^ length of file in minutes
+
 float sorted[BUFFER_LEN*2];
 int gCount = 1;
 int gArm = 0;
@@ -36,19 +38,19 @@ AuxiliaryTask gOpenFileTask;
 
 SF_INFO sfinfo;
 
-const char* path = "./test.wav";
+//const char* path = "/root/media/sd/record.wav";
+const char* path = "/root/other/wavs/record.wav";
 
 SNDFILE * outfile;
 
 void openFile(void*) {
-
-    //open sndfile pointer??
-    // sf_open(filepath, mode, pointer to sfinfo)
-    //     mode can be read, write, or read/write
+    /* open sndfile pointer??
+       sf_open(filepath, mode, pointer to sfinfo)
+                         mode can be read, write, or read/write
+     */
     outfile = sf_open(path, SFM_WRITE, &sfinfo);
     printf(".wav file open and writing\n");
 }
-
 
 void closeFile(void*) {
     sf_write_sync(outfile);
@@ -66,10 +68,12 @@ void writeFile(float *buf, int startSamp, int endSamp){
     //calculate duration of write operation - wouldn't this just be BUFFER_LEN?
     int frameLen = endSamp - startSamp;
 
-    //to use sf_write_xxxx functions, you must declare it as an sf_count variable
-    //because it returns the number of samples/frames written (but this value does not
-    //necessarily need to be used)
-    //                 sf_write_float(pointer to file opened by sf_open, array start, array length)
+    /*
+    to use sf_write_xxxx functions, you must declare it as an sf_count variable
+    because it returns the number of samples/frames written (but this value does not
+    necessarily need to be used)
+                     sf_write_float(pointer to file opened by sf_open, array start, array length)
+    */
     sf_count_t count = sf_write_float(outfile, &buf[0], frameLen);
 
 }
@@ -85,7 +89,7 @@ void fillBuffer(void*) {
 
     writeFile(sorted, gChunk, end);
 
-    printf("writing file at %d - %d\n", gChunk, end);
+    //printf("writing file at %d - %d\n", gChunk, end);
 
     //signal the file is written
     gDoneLoadingBuffer = 1;
@@ -96,9 +100,9 @@ void fillBuffer(void*) {
 bool setup(BelaContext *context, void *userData) {
 
     //LED and Button pins
-    pinMode(context, 0, P8_08, INPUT);
-    pinMode(context, 0, P8_07, OUTPUT);
-    pinMode(context, 0, P9_16, OUTPUT);
+    pinMode(context, 0, 1, INPUT);      //P8_08 // button
+    pinMode(context, 0, 0, OUTPUT);     //P8_07 // active LED
+    pinMode(context, 0, 10, OUTPUT);    //P9_16 // record LED
 
     //initialize auxiliary task
     if((gFillBufferTask = Bela_createAuxiliaryTask(&fillBuffer, 90, "fill-buffer")) == 0) {
@@ -124,15 +128,16 @@ bool setup(BelaContext *context, void *userData) {
     }
 
     return true;
+
 }
 
 void render(BelaContext *context, void *userData) {
 
     for(unsigned int n = 0; n < context -> digitalFrames; n++){
 
-        digitalWriteOnce(context, n, P9_16, 1); //write the status to the LED
+        digitalWriteOnce(context, n, 10, 1); //write the status to the LED
 
-        bNow = 1 - digitalRead(context, 0, P8_08); //read the value of the button
+        bNow = 1 - digitalRead(context, 0, 1); //read the inverse value of the button
 
         if (bNow != bPrev) {
             if (bNow == 1) {
@@ -145,7 +150,7 @@ void render(BelaContext *context, void *userData) {
         }
 
         bPrev = bNow;
-        digitalWriteOnce(context, n, P8_07, bEnable); //write the status to the LED
+        digitalWriteOnce(context, n, 0, bEnable); //write the status to the LED
     }
 
     for(unsigned int n = 0; n < context->audioFrames; n++) {
@@ -156,7 +161,7 @@ void render(BelaContext *context, void *userData) {
         //swap buffers when gPos reaches BUFFER_LEN
         if(gPos == 0) {
             if(!gDoneLoadingBuffer && gCount <= gDuration && gCount > 0) {
-                printf("increase buffer size!\n");
+                printf("dropped\n");
             }
 
             gDoneLoadingBuffer = 0;
